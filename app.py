@@ -3,41 +3,47 @@ import streamlit as st
 import json
 import os
 import random
-import pathlib
+import bcrypt
 
 # -----------------------------
-# Config fichiers
+# Configuration fichiers
 # -----------------------------
 USERS_FILE = "users.json"
-USER_DATA_DIR = "user_data"  # dossiers où seront les fichiers {username}.json
+USER_DATA_DIR = "user_data"  # fichiers {username}.json
 
-# Crée le dossier user_data si nécessaire
 os.makedirs(USER_DATA_DIR, exist_ok=True)
 
 # -----------------------------
-# Utilitaires utilisateurs
+# Utilitaires utilisateurs & données
 # -----------------------------
 def load_users():
     if not os.path.exists(USERS_FILE):
         return {}
-    with open(USERS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 def save_users(users):
     with open(USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, indent=4, ensure_ascii=False)
 
+def safe_filename(username):
+    return "".join(c for c in username if c.isalnum() or c in ("_", "-")).strip()
+
 def user_file(username):
-    safe = "".join(c for c in username if c.isalnum() or c in ("_", "-")).strip()
-    return os.path.join(USER_DATA_DIR, f"{safe}.json")
+    return os.path.join(USER_DATA_DIR, f"{safe_filename(username)}.json")
 
 def load_user_cards(username):
     path = user_file(username)
     if not os.path.exists(path):
-        # return empty dict by default
         return {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 def save_user_cards(username, cards):
     path = user_file(username)
@@ -45,33 +51,36 @@ def save_user_cards(username, cards):
         json.dump(cards, f, indent=4, ensure_ascii=False)
 
 # -----------------------------
+# Hash & vérification bcrypt
+# -----------------------------
+def hash_password(password: str) -> str:
+    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+    return hashed.decode("utf-8")
+
+def check_password(password: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+# -----------------------------
 # Session state init
 # -----------------------------
 if "username" not in st.session_state:
     st.session_state.username = None
 if "mode" not in st.session_state:
-    st.session_state.mode = "auth"  # auth, menu, play, create, edit, delete
+    st.session_state.mode = "auth"  # auth, menu, create, edit, delete, choose_play, play
 if "cards" not in st.session_state:
     st.session_state.cards = {}
 if "current_set" not in st.session_state:
     st.session_state.current_set = None
 if "current_mode" not in st.session_state:
     st.session_state.current_mode = None
-if "remaining" not in st.session_state:
-    st.session_state.remaining = None
-if "current_question" not in st.session_state:
-    st.session_state.current_question = None
-if "answer_shown" not in st.session_state:
-    st.session_state.answer_shown = False
-if "total" not in st.session_state:
-    st.session_state.total = 0
-if "score" not in st.session_state:
-    st.session_state.score = 0
 
 users = load_users()
 
 # -----------------------------
-# Auth pages (Register / Login)
+# Auth : register / login / logout
 # -----------------------------
 def register_page():
     st.header("🆕 Créer un compte")
@@ -84,7 +93,7 @@ def register_page():
         if username in users:
             st.error("Ce nom d'utilisateur existe déjà.")
             return
-        users[username] = password  # stocké en clair (option A)
+        users[username] = {"password": hash_password(password)}
         save_users(users)
         # créer fichier vide pour l'utilisateur
         save_user_cards(username, {})
@@ -100,11 +109,15 @@ def login_page():
             if not username or not password:
                 st.warning("Remplis les deux champs.")
                 return
-            if username not in users or users[username] != password:
+            entry = users.get(username)
+            if not entry or "password" not in entry:
                 st.error("Identifiants incorrects.")
                 return
+            if not check_password(password, entry["password"]):
+                st.error("Identifiants incorrects.")
+                return
+            # succès
             st.session_state.username = username
-            # charger les cartes de l'utilisateur
             st.session_state.cards = load_user_cards(username)
             st.session_state.mode = "menu"
             st.success(f"Connecté en tant que {username} !")
@@ -119,19 +132,18 @@ def logout():
     st.session_state.username = None
     st.session_state.cards = {}
     st.session_state.mode = "auth"
-    # reset session keys used by play
     for k in ["current_set", "current_mode", "remaining", "current_question", "answer_shown", "total", "score"]:
         if k in st.session_state:
             del st.session_state[k]
     st.experimental_rerun()
 
 # -----------------------------
-# Menu principal & fonctionnalités
+# Pages : menu / create / edit / delete
 # -----------------------------
 def menu_page():
     st.title("🧠 Flashcards")
     if st.session_state.username:
-        st.write(f"Connecté en tant que **{st.session_state.username}**  •  [Se déconnecter](#)")
+        st.write(f"Connecté : **{st.session_state.username}**")
         if st.button("Se déconnecter"):
             logout()
             return
@@ -139,7 +151,6 @@ def menu_page():
         st.write("Mode invité (aucune modification ne sera sauvegardée).")
 
     st.write("---")
-    st.write("Choisis une action :")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🎓 Réviser une fiche"):
@@ -155,7 +166,7 @@ def menu_page():
         if st.button("🗑️ Supprimer une fiche"):
             st.session_state.mode = "choose_delete"
 
-    # show quick list
+    st.write("---")
     if st.session_state.cards:
         st.write("### Tes fiches :")
         for name in st.session_state.cards.keys():
@@ -163,9 +174,6 @@ def menu_page():
     else:
         st.info("Tu n'as aucune fiche pour l'instant. Crée-en une !")
 
-# -----------------------------
-# Create / Edit / Delete
-# -----------------------------
 def create_page():
     st.title("➕ Créer une nouvelle fiche")
     name = st.text_input("Nom de la fiche", key="create_name")
@@ -183,7 +191,6 @@ def create_page():
             st.warning("Aucune carte valide détectée.")
             return
         st.session_state.cards[name] = new_dict
-        # sauvegarde si connecté
         if st.session_state.username:
             save_user_cards(st.session_state.username, st.session_state.cards)
             st.success("Fiche enregistrée pour ton compte.")
@@ -239,7 +246,7 @@ def choose_delete_page():
         st.session_state.mode = "menu"
 
 # -----------------------------
-# Play (2 modes) : flow similaire à la version précédente
+# Play : choix & session (2 modes)
 # -----------------------------
 def choose_play_page():
     st.title("🎓 Réviser une fiche")
@@ -251,7 +258,6 @@ def choose_play_page():
     if st.button("Commencer"):
         st.session_state.current_set = name
         st.session_state.current_mode = mode
-        # initialize session state for play
         st.session_state.remaining = list(st.session_state.cards[name].keys())
         st.session_state.total = len(st.session_state.remaining)
         st.session_state.current_question = None
@@ -275,7 +281,6 @@ def play_page():
             st.session_state.mode = "menu"
         return
 
-    # pick question
     if not st.session_state.current_question:
         st.session_state.current_question = random.choice(st.session_state.remaining)
 
@@ -316,7 +321,7 @@ def play_page():
         st.session_state.mode = "menu"
 
 # -----------------------------
-# Router principal
+# Sidebar : auth / navigation
 # -----------------------------
 st.sidebar.title("Compte")
 if st.session_state.username:
@@ -332,9 +337,10 @@ else:
 
 st.sidebar.write("---")
 if st.session_state.username:
-    st.sidebar.button("Menu principal", on_click=lambda: setattr(st.session_state, "mode", "menu"))
+    if st.sidebar.button("Menu principal"):
+        st.session_state.mode = "menu"
 
-# Main area routing
+# Router principal
 if st.session_state.mode == "auth":
     st.info("Utilise la barre latérale pour te connecter ou t'inscrire.")
 elif st.session_state.mode == "menu":
@@ -351,7 +357,4 @@ elif st.session_state.mode == "choose_play":
     choose_play_page()
 elif st.session_state.mode == "play":
     play_page()
-
-
-
 
