@@ -3,186 +3,267 @@ import json
 import os
 import random
 
+
 # -----------------------------
-# Chargement & sauvegarde JSON
+# Fichiers JSON
 # -----------------------------
 CARDS_FILE = "flashcards.json"
+DEFAULT_CARDS = {}
 
-DEFAULT_CARDS = {
-    "mot pour synthese": {
-        "le dernier cité": "The latter",
-        "to weight up": "évaluer, peser le pour et le contre",
-        "to enhance": "améliorer",
-        "so called": "soi-disant",
-        "namely": "à savoir, en l'occurrence"
-    },
-    "lien logique": {
-        "thus": "ainsi",
-        "while": "tandis que",
-        "Hence": "d'où",
-        "wether it be": "qu'il s'agisse de"
-    },
-    "grammaire": {
-        "Avoir l'habitude de": "to be used to + v en ing",
-        "action révolue : avant mais plus maintenant": "used to + BV",
-        "depuis": "for (durée) / since (point de départ)",
-        "exprimer une date limite (prêt d'ici demain)": "by (ready by tomorrow)",
-        "moi aussi": "so + auxiliaire (She has finished, so have I)"
-    }
-}
 
-def load_json():
-    if not os.path.exists(CARDS_FILE):
-        save_json(DEFAULT_CARDS)
-        return DEFAULT_CARDS
-    with open(CARDS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_json(filename):
+    """Charge les fiches depuis un fichier JSON et fusionne avec les fiches par défaut."""
+    data = DEFAULT_CARDS.copy()
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                file_data = json.load(f)
+                for name, cards in file_data.items():
+                    data[name] = cards
+        except Exception as e:
+            st.error(f"Erreur de lecture : {e}")
+    return data
 
-def save_json(data):
-    with open(CARDS_FILE, "w", encoding="utf-8") as f:
+
+def save_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-CARDS = load_json()
 
-# -----------------------------
-# App Streamlit
-# -----------------------------
-st.title("🧠 Flashcards Online")
+# Load & Session State
+if "cards" not in st.session_state:
+    st.session_state.cards = load_json(CARDS_FILE)
 
-menu = st.sidebar.selectbox(
-    "Menu",
-    ["🏠 Accueil", "🎓 Réviser une fiche", "➕ Créer une fiche",
-     "✏️ Modifier une fiche", "🗑️ Supprimer une fiche"]
-)
+if "mode" not in st.session_state:
+    st.session_state.mode = "menu"  # menu, play, create, edit, delete
 
-# -----------------------------
-# ACCUEIL
-# -----------------------------
-if menu == "🏠 Accueil":
-    st.subheader("Bienvenue dans ton application de Flashcards !")
-    st.write("Choisis une action dans le menu à gauche.")
 
-# -----------------------------
-# CRÉER UNE FICHE
-# -----------------------------
-elif menu == "➕ Créer une fiche":
-    st.subheader("Créer une nouvelle fiche")
+# ---------------------------------------------------
+# PAGE : MENU PRINCIPAL
+# ---------------------------------------------------
+def menu_page():
+    st.title("🧠 Flashcards")
+
+    st.write("### Choisis une action :")
+
+    if st.button("🎓 Lancer une fiche"):
+        st.session_state.mode = "choose_play"
+
+    if st.button("➕ Créer une nouvelle fiche"):
+        st.session_state.mode = "create"
+
+    if st.button("✏️ Modifier une fiche"):
+        st.session_state.mode = "choose_edit"
+
+    if st.button("🗑️ Supprimer une fiche"):
+        st.session_state.mode = "choose_delete"
+
+
+# ---------------------------------------------------
+# PAGE : CHOIX DE LA FICHE À LANCER
+# ---------------------------------------------------
+def choose_play_page():
+    st.title("🎓 Lancer une fiche")
+
+    cards = st.session_state.cards
+
+    name = st.selectbox("Choisis une fiche :", list(cards.keys()))
+
+    mode = st.radio("Choisis le mode :", ["Mode Révision (voir la réponse)", "Mode Saisie (écrire la réponse)"])
+
+    if st.button("▶️ Lancer"):
+        st.session_state.current_set = name
+        st.session_state.current_mode = mode
+        st.session_state.mode = "play"
+        start_session()
+
+
+# ---------------------------------------------------
+# LANCEMENT DE SESSION FLASHCARDS
+# ---------------------------------------------------
+def start_session():
+    name = st.session_state.current_set
+    cards = st.session_state.cards[name]
+
+    if "remaining" not in st.session_state:
+        st.session_state.remaining = list(cards.keys())
+        st.session_state.score = 0
+        st.session_state.total = len(cards)
+        st.session_state.current_question = None
+        st.session_state.answer_shown = False
+
+    # Fin ?
+    if not st.session_state.remaining:
+        st.success(f"🎉 Tu as terminé la fiche **{name}** !")
+        if st.button("🔄 Rejouer"):
+            del st.session_state.remaining
+            st.session_state.mode = "play"
+        if st.button("🏠 Retour au menu"):
+            reset_session()
+            st.session_state.mode = "menu"
+        return
+
+    # Nouvelle question ?
+    if st.session_state.current_question is None:
+        st.session_state.current_question = random.choice(st.session_state.remaining)
+
+    question = st.session_state.current_question
+    answer = cards[question]
+
+    st.title(f"📘 {name}")
+    st.write(f"### ❓ {question}")
+
+    # Mode 1 : Voir la réponse
+    if st.session_state.current_mode == "Mode Révision (voir la réponse)":
+        if not st.session_state.answer_shown:
+            if st.button("👀 Voir la réponse"):
+                st.session_state.answer_shown = True
+        else:
+            st.success(f"💡 Réponse : {answer}")
+            col1, col2 = st.columns(2)
+            if col1.button("✅ J'ai su"):
+                st.session_state.remaining.remove(question)
+                st.session_state.current_question = None
+                st.session_state.answer_shown = False
+            if col2.button("❌ Pas su"):
+                st.session_state.current_question = None
+                st.session_state.answer_shown = False
+
+    # Mode 2 : Écrire la réponse
+    else:
+        user_answer = st.text_input("✏️ Ta réponse :")
+
+        if st.button("Valider"):
+            if user_answer.strip().lower() == answer.strip().lower():
+                st.success("✅ Bonne réponse !")
+                st.session_state.remaining.remove(question)
+            else:
+                st.error(f"❌ Faux ! La bonne réponse était : {answer}")
+
+            st.session_state.current_question = None
+
+    # Progression
+    done = st.session_state.total - len(st.session_state.remaining)
+    st.info(f"Progression : {done}/{st.session_state.total}")
+
+    if st.button("🏠 Retour au menu"):
+        reset_session()
+        st.session_state.mode = "menu"
+
+
+def reset_session():
+    for key in ["remaining", "current_question", "score", "total", "answer_shown"]:
+        if key in st.session_state:
+            del st.session_state[key]
+
+
+# ---------------------------------------------------
+# PAGE : CRÉATION D’UNE FICHE
+# ---------------------------------------------------
+def create_page():
+    st.title("➕ Créer une nouvelle fiche")
 
     name = st.text_input("Nom de la fiche")
 
-    content = st.text_area(
-        "Ajoute tes cartes (une par ligne, format : question - réponse)"
-    )
+    text = st.text_area("Questions - Réponses (une par ligne, format : question - réponse)")
 
-    if st.button("Enregistrer"):
-        if name.strip() == "" or content.strip() == "":
+    if st.button("💾 Enregistrer"):
+        if not name or not text.strip():
             st.warning("Remplis tous les champs.")
-        else:
-            new_cards = {}
-            for line in content.split("\n"):
-                if "-" in line:
-                    q, a = line.split("-", 1)
-                    new_cards[q.strip()] = a.strip()
-            CARDS[name] = new_cards
-            save_json(CARDS)
-            st.success(f"Fiche '{name}' créée avec succès !")
+            return
 
-# -----------------------------
-# MODIFIER UNE FICHE
-# -----------------------------
-elif menu == "✏️ Modifier une fiche":
-    st.subheader("Modifier une fiche")
-
-    chosen = st.selectbox("Choisis une fiche :", list(CARDS.keys()))
-
-    existing = CARDS[chosen]
-    text = "\n".join([f"{q} - {a}" for q, a in existing.items()])
-
-    edited = st.text_area("Modifie les cartes :", text)
-
-    if st.button("Enregistrer les modifications"):
-        new_cards = {}
-        for line in edited.split("\n"):
+        new_dict = {}
+        for line in text.split("\n"):
             if "-" in line:
                 q, a = line.split("-", 1)
-                new_cards[q.strip()] = a.strip()
-        CARDS[chosen] = new_cards
-        save_json(CARDS)
-        st.success("Modifications enregistrées.")
+                new_dict[q.strip()] = a.strip()
 
-# -----------------------------
-# SUPPRIMER UNE FICHE
-# -----------------------------
-elif menu == "🗑️ Supprimer une fiche":
-    st.subheader("Supprimer une fiche")
-    chosen = st.selectbox("Sélectionne une fiche :", list(CARDS.keys()))
+        if not new_dict:
+            st.warning("Aucune carte valide.")
+            return
 
-    if st.button("Supprimer définitivement"):
-        CARDS.pop(chosen)
-        save_json(CARDS)
-        st.success(f"Fiche '{chosen}' supprimée.")
+        st.session_state.cards[name] = new_dict
+        save_json(CARDS_FILE, st.session_state.cards)
+        st.success(f"Fiche '{name}' enregistrée !")
+        st.session_state.mode = "menu"
 
-# -----------------------------
-# RÉVISER UNE FICHE
-# -----------------------------
-elif menu == "🎓 Réviser une fiche":
-    st.subheader("Choisis une fiche à réviser")
 
-    list_name = st.selectbox("Fiche :", list(CARDS.keys()))
-    mode = st.radio("Choisis ton mode :", ["✍️ Mode écriture", "👀 Mode affichage simple"])
+# ---------------------------------------------------
+# PAGE : CHOISIR UNE FICHE À MODIFIER
+# ---------------------------------------------------
+def choose_edit_page():
+    st.title("✏️ Modifier une fiche")
+    name = st.selectbox("Choisis une fiche :", list(st.session_state.cards.keys()))
 
-    if st.button("Commencer"):
-        st.session_state["flash_list"] = list_name
-        st.session_state["mode"] = mode
-        st.session_state["remaining"] = list(CARDS[list_name].keys())
-        st.session_state["current"] = None
-        st.session_state["score"] = 0
+    if st.button("Modifier"):
+        st.session_state.editing = name
+        st.session_state.mode = "edit"
 
-    # Déjà une session lancée ?
-    if "remaining" in st.session_state and st.session_state.get("flash_list") == list_name:
-        remaining = st.session_state["remaining"]
 
-        if len(remaining) == 0:
-            st.success("🎉 Fiche terminée !")
-            st.write(f"Score : {st.session_state['score']}")
-            if st.button("Recommencer"):
-                st.session_state["remaining"] = list(CARDS[list_name].keys())
-                st.session_state["score"] = 0
-            st.stop()
+# ---------------------------------------------------
+# PAGE : ÉDITION D’UNE FICHE
+# ---------------------------------------------------
+def edit_page():
+    name = st.session_state.editing
+    st.title(f"Modifier : {name}")
 
-        # Nouvelle carte ?
-        if st.session_state["current"] is None:
-            st.session_state["current"] = random.choice(remaining)
+    cards = st.session_state.cards[name]
 
-        q = st.session_state["current"]
-        a = CARDS[list_name][q]
+    text = ""
+    for q, a in cards.items():
+        text += f"{q} - {a}\n"
 
-        st.write(f"### ❓ {q}")
+    new_text = st.text_area("Modifie les cartes :", text)
 
-        mode = st.session_state["mode"]
+    if st.button("💾 Sauvegarder"):
+        new_dict = {}
+        for line in new_text.split("\n"):
+            if "-" in line:
+                q, a = line.split("-", 1)
+                new_dict[q.strip()] = a.strip()
 
-        # Mode écriture
-        if mode == "✍️ Mode écriture":
-            user = st.text_input("Écris ta réponse")
+        st.session_state.cards[name] = new_dict
+        save_json(CARDS_FILE, st.session_state.cards)
+        st.success("Modifications enregistrées !")
+        st.session_state.mode = "menu"
 
-            if st.button("Valider"):
-                if user.lower().strip() == a.lower().strip():
-                    st.success("✔ Correct !")
-                    st.session_state["score"] += 1
-                    remaining.remove(q)
-                    st.session_state["current"] = None
-                else:
-                    st.error(f"❌ Incorrect. Réponse : {a}")
 
-        # Mode affichage simple
-        else:
-            if st.button("Voir la réponse"):
-                st.info(f"💡 Réponse : {a}")
+# ---------------------------------------------------
+# PAGE : SUPPRESSION
+# ---------------------------------------------------
+def choose_delete_page():
+    st.title("🗑️ Supprimer une fiche")
+    name = st.selectbox("Choisis une fiche :", list(st.session_state.cards.keys()))
 
-            col1, col2 = st.columns(2)
-            if col1.button("J'ai su"):
-                st.session_state["score"] += 1
-                remaining.remove(q)
-                st.session_state["current"] = None
-            if col2.button("Pas su"):
-                st.session_state["current"] = None
+    if st.button("❌ Supprimer définitivement"):
+        del st.session_state.cards[name]
+        save_json(CARDS_FILE, st.session_state.cards)
+        st.success(f"Fiche '{name}' supprimée.")
+        st.session_state.mode = "menu"
+
+
+# ---------------------------------------------------
+# ROUTEUR PRINCIPAL
+# ---------------------------------------------------
+if st.session_state.mode == "menu":
+    menu_page()
+
+elif st.session_state.mode == "choose_play":
+    choose_play_page()
+
+elif st.session_state.mode == "play":
+    start_session()
+
+elif st.session_state.mode == "create":
+    create_page()
+
+elif st.session_state.mode == "choose_edit":
+    choose_edit_page()
+
+elif st.session_state.mode == "edit":
+    edit_page()
+
+elif st.session_state.mode == "choose_delete":
+    choose_delete_page()
+
+
